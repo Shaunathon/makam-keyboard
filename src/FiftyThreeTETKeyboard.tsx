@@ -55,16 +55,16 @@ const CESNI_OPTIONS: CesniChoice[] = [
   { id: 'none', label: 'None', steps: [] },
   { id: 'kurdi_penta', label: 'Kürdi pentachord', steps: [0, 4, 13, 22, 31] },
   // Rename old Rast [0,9,18,22,31] to Cargah
-  { id: 'cargah_penta', label: 'Cargah pentachord', steps: [0, 9, 18, 22, 31] },
+  { id: 'cargah_penta', label: 'Çargah pentachord', steps: [0, 9, 18, 22, 31] },
   // Updated Rast
   { id: 'rast_penta', label: 'Rast pentachord', steps: [0, 9, 17, 22, 31] },
   { id: 'buselik_penta', label: 'Buselik pentachord', steps: [0, 9, 13, 22, 31] },
   // Updated tetrachords/pentachords
-  { id: 'ussak_tetra', label: 'Ussak tetrachord', steps: [0, 8, 13, 22] },
+  { id: 'ussak_tetra', label: 'Uşşak tetrachord', steps: [0, 8, 13, 22] },
   { id: 'sabah_tetra', label: 'Sabah tetrachord', steps: [0, 8, 13, 18] },
   { id: 'hicaz_penta', label: 'Hicaz pentachord', steps: [0, 5, 17, 22, 31] },
   { id: 'segah_penta', label: 'Segah pentachord', steps: [0, 5, 14, 22, 31] },
-  { id: 'huseyni_penta', label: 'Huseyni pentachord', steps: [0, 8, 13, 22, 31] },
+  { id: 'huseyni_penta', label: 'Hüseyni pentachord', steps: [0, 8, 13, 22, 31] },
   { id: 'custom', label: 'Custom (enter steps)', steps: [] },
 ];
 
@@ -182,7 +182,7 @@ export default function FiftyThreeTETKeyboard() {
   const [showJust, setShowJust] = useState(true);
 
   // Çeşni selection (for highlights)
-  const [cesniId, setCesniId] = useState<string>('none');
+  const [cesniId, setCesniId] = useState<string>('rast_penta');
   const [customStepsStr, setCustomStepsStr] = useState<string>('');
   const customParsed = useMemo(() => parseStepList(customStepsStr), [customStepsStr]);
   const cesniSteps = useMemo(() => {
@@ -581,7 +581,19 @@ export default function FiftyThreeTETKeyboard() {
                 className="bg-neutral-800 rounded px-2 py-1"
                 value={cesniId}
                 onMouseDown={() => (selectOpenRef.current = true)}
-                onChange={(e)=> { setCesniId((e.target as HTMLSelectElement).value); selectOpenRef.current = false; (e.target as HTMLSelectElement).blur(); }}
+                onChange={(e) => {
+                  const nextId = (e.target as HTMLSelectElement).value;
+
+                  // If switching to "custom", prefill the textbox with the current highlights
+                  if (nextId === 'custom' && cesniId !== 'custom' && cesniSteps.length) {
+                    // space-separated, per your example: "0 8 13 22 31"
+                    setCustomStepsStr(cesniSteps.join(' '));
+                  }
+
+                  setCesniId(nextId);
+                  selectOpenRef.current = false;
+                  (e.target as HTMLSelectElement).blur();
+                }}
                 onBlur={() => (selectOpenRef.current = false)}
                 onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') selectOpenRef.current = false; }}
               >
