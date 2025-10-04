@@ -239,6 +239,9 @@ export default function FiftyThreeTETKeyboard() {
       close(Math.pow(R,53), 2, 1e-6) ? ok('(2^(1/53))^53 ≈ 2') : bad('ratio');
       close(31*CENTS_PER_STEP, 701.955, 0.5) ? ok('31 steps ≈ perfect fifth') : bad('fifth');
       close(baseFreqFromSemitones(0), D4_FREQ, 0.02) ? ok('base semitones 0 = D4') : bad('base semitones 0');
+      // Extra usage to satisfy TS (and verify correctness)
+      close(freqForStepFromBase(0, D4_FREQ), D4_FREQ, 1e-4) ? ok('freqForStepFromBase step0 = base') : bad('freqForStepFromBase');
+      (fmtSigned1(-3.25) === "-3.3 cents") ? ok('fmtSigned1 rounding') : bad('fmtSigned1');
       const tetSteps = Array.from({length:8},(_,s)=> Math.round((STEPS*s)/12));
       JSON.stringify(tetSteps)===JSON.stringify([0,4,9,13,18,22,27,31]) ? ok('12‑TET markers') : bad('12‑TET markers');
       const justSteps = [1/1,16/15,9/8,6/5,5/4,4/3,45/32,3/2].map((r:number)=> Math.round(cents(r)/CENTS_PER_STEP));
@@ -435,14 +438,11 @@ export default function FiftyThreeTETKeyboard() {
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
   }, [cesniSteps, sustain, waveform, gain, attack, release, baseFreq]);
 
-  //Browser tab title??
-  useEffect(() => { document.title = "Makam Klavyesi"; }, []);
-
   // Per‑key handlers
   const onPointerDown = (step: number) => (e: React.PointerEvent) => { e.preventDefault(); if (sustain) { toggleLatched(step); return; } startForPointer(e.pointerId, step); };
   const onPointerEnter = (step: number) => (e: React.PointerEvent) => { if (!sustain && activePointers.current.has(e.pointerId)) retuneForPointer(e.pointerId, step); };
-  const onPointerUp = (step: number) => (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
-  const onPointerCancel = (step: number) => (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
+  const onPointerUp = (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
+  const onPointerCancel = (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
 
   // --- Touch tooltip: press‑and‑scrub over 12‑TET marker row ---
   const updateTetTipFromClientX = (clientX: number) => {
@@ -653,8 +653,8 @@ export default function FiftyThreeTETKeyboard() {
                   style={styleOverride}
                   onPointerDown={onPointerDown(k.step)}
                   onPointerEnter={onPointerEnter(k.step)}
-                  onPointerUp={onPointerUp(k.step)}
-                  onPointerCancel={onPointerCancel(k.step)}
+                  onPointerUp={onPointerUp}
+                  onPointerCancel={onPointerCancel}
                   onContextMenu={(e) => e.preventDefault()}
                   title={`Step ${k.step} • ${fmtCents(k.cents)} cents`}
                 >
