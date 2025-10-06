@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// 53‑TET Keyboard – Web Audio React App (D4‑centric)
-// Now lighter: self‑tests moved to a separate document. This file exposes
-// testable helpers on `window.__testables_53tet` for the test harness.
+// 53-TET Keyboard – Web Audio React App (D4-centric)
 
 // ------------------------------ Constants & Math ------------------------------
 const D4_FREQ = 293.6647679; // Hz
@@ -11,64 +9,79 @@ const STEPS = 53; // steps per octave
 const R = Math.pow(2, 1 / STEPS); // ratio per step (koma)
 const CENTS_PER_STEP = 1200 / STEPS; // ≈ 22.6415
 
-// Keyboard span: perfect fifth in 53‑TET is 31 komas (~702 cents)
-const MAX_STEP = 31; // inclusive (0..31)
-const KEYS_COUNT = MAX_STEP + 1; // 32 keys
+const MAX_STEP = 31; // fallback upper bound for kb1 when empty
+const ABS_MAX_STEP = 53; // max absolute step in the octave
 
-// Visual fade time helper
-const MIN_REL = 0.03; // 30ms minimum to avoid hard cuts
-function visualReleaseMs(rel: number) {
-  return Math.max(90, Math.round((Math.max(MIN_REL, rel) + 0.01) * 1000));
-}
-
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-function midiNameFromSemis(semitonesFromD4: number) {
-  const midi = D4_MIDI + semitonesFromD4;
-  const name = NOTE_NAMES[(midi % 12 + 12) % 12];
-  const octave = Math.floor(midi / 12) - 1;
-  return `${name}${octave}`;
+// Generalized key mapping for both keyboards
+function resolveStepForKeyWithOrder(key: string, steps: number[], order: string[]): number | null {
+  const idx = order.indexOf(key.toLowerCase());
+  if (idx === -1) return null;
+  if (idx >= steps.length) return null;
+  return steps[idx] ?? null;
 }
 
-// Helpers
-function baseFreqFromSemitones(semitonesFromD4: number): number {
-  return D4_FREQ * Math.pow(2, semitonesFromD4 / 12);
-}
-function freqForStepFromBase(step: number, baseFreq: number): number {
-  return baseFreq * Math.pow(R, step);
-}
-const fmtHz = (f: number) => (f < 1000 ? f.toFixed(2) : f.toFixed(1));
-const fmtCents = (c: number) => c.toFixed(2);
+// Math + fmt
 const cents = (ratio: number) => 1200 * Math.log2(ratio);
 const fmtSigned1 = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)} cents`;
+const fmtHz = (f: number) => `${f.toFixed(2)}`.replace(/\.00$/, '');
+const fmtCents = (c: number) => `${c.toFixed(1)}¢`;
 
-// Choose nearest member from a set (for snapping to existing marker steps)
-function nearestFromSet(target: number, set: Set<number>): number {
-  let best = Infinity; let choice = target;
-  set.forEach((s) => { const d = Math.abs(s - target); if (d < best) { best = d; choice = s; } });
-  return choice;
+// Snapping helper
+function nearestFromSet(target: number, set: Set<number>) {
+  let best: number | null = null, bestDist = Infinity;
+  set.forEach(n => { const d = Math.abs(n - target); if (d < bestDist) { best = n; bestDist = d; } });
+  return best;
 }
 
-// ------------------------------ Çeşni definitions ------------------------------
+// MIDI-ish helpers
+const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const midiNameFromSemis = (dSemis: number) =>
+  NOTE_NAMES[(D4_MIDI + dSemis + 1200) % 12] + (Math.floor((D4_MIDI + dSemis) / 12) - 1);
+const baseFreqFromSemitones = (dSemis: number) => D4_FREQ * Math.pow(2, dSemis / 12);
 
+// Expose some helpers for quick console tests
+;(window as any).__testables_53tet = { R, cents, midiNameFromSemis, baseFreqFromSemitones, fmtSigned1 };
+
+// ------------------------------ Çeşni options ------------------------------
 type CesniChoice = { id: string; label: string; steps: number[] };
-const CESNI_OPTIONS: CesniChoice[] = [
+
+/**
+ * Pentachords with tetrachord counterparts (omit 31st koma for tetras).
+ * Hüseyni exists only as a pentachord.
+ */
+const CESNI_OPTIONS_RAW: CesniChoice[] = [
   { id: 'none', label: 'None', steps: [] },
-  { id: 'kurdi_penta', label: 'Kürdi pentachord', steps: [0, 4, 13, 22, 31] },
-  // Rename old Rast [0,9,18,22,31] to Cargah
-  { id: 'cargah_penta', label: 'Çargah pentachord', steps: [0, 9, 18, 22, 31] },
-  // Updated Rast
-  { id: 'rast_penta', label: 'Rast pentachord', steps: [0, 9, 17, 22, 31] },
+
+  // Pentachords
   { id: 'buselik_penta', label: 'Buselik pentachord', steps: [0, 9, 13, 22, 31] },
-  // Updated tetrachords/pentachords
-  { id: 'ussak_tetra', label: 'Uşşak tetrachord', steps: [0, 8, 13, 22] },
-  { id: 'sabah_tetra', label: 'Sabah tetrachord', steps: [0, 8, 13, 18] },
-  { id: 'hicaz_penta', label: 'Hicaz pentachord', steps: [0, 5, 17, 22, 31] },
-  { id: 'segah_penta', label: 'Segah pentachord', steps: [0, 5, 14, 22, 31] },
+  { id: 'cargah_penta',  label: 'Çargah pentachord',  steps: [0, 9, 18, 22, 31] },
+  { id: 'hicaz_penta',   label: 'Hicaz pentachord',   steps: [0, 5, 17, 22, 31] },
   { id: 'huseyni_penta', label: 'Hüseyni pentachord', steps: [0, 8, 13, 22, 31] },
+  { id: 'kurdi_penta',   label: 'Kürdi pentachord',   steps: [0, 4, 13, 22, 31] },
+  { id: 'rast_penta',    label: 'Rast pentachord',    steps: [0, 9, 17, 22, 31] },
+  { id: 'segah_penta',   label: 'Segah pentachord',   steps: [0, 5, 14, 22, 31] },
+
+  // Tetrachords derived from pentachords (omit 31)
+  { id: 'buselik_tetra', label: 'Buselik tetrachord', steps: [0, 9, 13, 22] },
+  { id: 'cargah_tetra',  label: 'Çargah tetrachord',  steps: [0, 9, 18, 22] },
+  { id: 'hicaz_tetra',   label: 'Hicaz tetrachord',   steps: [0, 5, 17, 22] },
+  { id: 'kurdi_tetra',   label: 'Kürdi tetrachord',   steps: [0, 4, 13, 22] },
+  { id: 'rast_tetra',    label: 'Rast tetrachord',    steps: [0, 9, 17, 22] },
+  { id: 'segah_tetra',   label: 'Segah tetrachord',   steps: [0, 5, 14, 22] },
+
+  // Independent tetrachords
+  { id: 'ussak_tetra',   label: 'Uşşak tetrachord',   steps: [0, 8, 13, 22] },
+  { id: 'sabah_tetra',   label: 'Sabah tetrachord',   steps: [0, 8, 13, 18] },
+
   { id: 'custom', label: 'Custom (enter steps)', steps: [] },
 ];
 
-// Parse helper for custom steps
+// Alphabetically-sorted options by label (includes None/Custom)
+const CESNI_OPTIONS: CesniChoice[] = CESNI_OPTIONS_RAW
+  .slice()
+  .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+
+// Custom parser for 0..31 (relative steps)
 function parseStepList(s: string): { steps: number[]; error: string | null } {
   if (!s.trim()) return { steps: [], error: null };
   const tokens = s.split(/[^0-9]+/).filter(Boolean);
@@ -83,7 +96,7 @@ function parseStepList(s: string): { steps: number[]; error: string | null } {
   return { steps: uniq, error: null };
 }
 
-// Smooth release curve (S‑curve)
+// Smooth release curve (S-curve)
 function buildSmoothDecayCurve(start: number, end = 1e-4, points = 256): Float32Array {
   const n = Math.max(2, points | 0);
   const floor = Math.max(end, 1e-6);
@@ -91,97 +104,274 @@ function buildSmoothDecayCurve(start: number, end = 1e-4, points = 256): Float32
   const curve = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
-    const smooth = t * t * (3 - 2 * t); // smoothstep
+    const smooth = t * t * (3 - 2 * t);
     const y = floor + (s0 - floor) * (1 - smooth);
     curve[i] = y;
   }
   return curve;
 }
 
-// Map keyboard keys A,S,D,F,G to the first five steps of the selected çeşni
-function resolveStepForKey(key: string, steps: number[]): number | null {
-  const order = ['a','s','d','f','g'];
-  const idx = order.indexOf(key.toLowerCase());
-  if (idx === -1) return null;
-  if (idx >= steps.length) return null; // tetrachords: 'g' does nothing
-  return steps[idx] ?? null;
-}
-
-// --- Expose testables for the external self‑tests doc ---
-if (typeof window !== 'undefined') {
-  (window as any).__testables_53tet = {
-    D4_FREQ, D4_MIDI, STEPS, R, CENTS_PER_STEP,
-    baseFreqFromSemitones, freqForStepFromBase, cents, fmtSigned1,
-    nearestFromSet, visualReleaseMs, parseStepList, resolveStepForKey,
-    CESNI_OPTIONS,
-  };
-}
-
-// ------------------------------ WebAudio Voice ------------------------------
+// Voice (Web Audio)
 class Voice {
   ctx: AudioContext;
   osc: OscillatorNode;
   gain: GainNode;
-  private _stopped = false;
+  releaseCurve: Float32Array;
 
-  constructor(ctx: AudioContext, type: OscillatorType, frequency: number, gainTarget: number, attack: number) {
+  constructor(ctx: AudioContext, waveform: OscillatorType, freq: number, gain: number, attack: number) {
     this.ctx = ctx;
     this.osc = ctx.createOscillator();
-    this.osc.type = type;
-    this.osc.frequency.value = frequency;
+    this.osc.type = waveform;
+    this.osc.frequency.value = freq;
+
     this.gain = ctx.createGain();
     this.gain.gain.value = 0;
-    this.osc.connect(this.gain).connect(ctx.destination);
-    this.osc.start();
+
     const now = ctx.currentTime;
+    const atk = Math.max(0.005, attack);
     this.gain.gain.cancelScheduledValues(now);
     this.gain.gain.setValueAtTime(0, now);
-    this.gain.gain.linearRampToValueAtTime(gainTarget, now + Math.max(0.001, attack));
+    this.gain.gain.linearRampToValueAtTime(gain, now + atk);
+
+    this.osc.connect(this.gain).connect(ctx.destination);
+    this.osc.start();
+
+    this.releaseCurve = buildSmoothDecayCurve(gain);
   }
 
-  setFrequency(freq: number) { this.osc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.01); }
-  setGain(target: number) { this.gain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.01); }
-  setWaveform(type: OscillatorType) { this.osc.type = type; }
+  setFrequency(f: number) { this.osc.frequency.value = f; }
+  setGain(g: number) {
+    const now = this.ctx.currentTime;
+    this.gain.gain.cancelScheduledValues(now);
+    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+    this.gain.gain.linearRampToValueAtTime(g, now + 0.01);
+    this.releaseCurve = buildSmoothDecayCurve(g);
+  }
+  setWaveform(w: OscillatorType) { this.osc.type = w; }
 
   stop(release: number, onEnded?: () => void) {
-    if (this._stopped) return; this._stopped = true;
-    const now = this.ctx.currentTime; const rel = Math.max(0.03, release);
-    const current = this.gain.gain.value;
+    const now = this.ctx.currentTime;
+    const rel = Math.max(0.02, release);
+    const curve = this.releaseCurve;
     this.gain.gain.cancelScheduledValues(now);
-    this.gain.gain.setValueAtTime(Math.max(current, 0.0001), now);
-    const rampEnd = now + rel;
-    try {
-      const curve = buildSmoothDecayCurve(this.gain.gain.value, 1e-4, 256);
-      this.gain.gain.setValueCurveAtTime(curve, now, rel);
-    } catch {
-      try { this.gain.gain.linearRampToValueAtTime(0.0001, rampEnd); }
-      catch { this.gain.gain.setTargetAtTime(0.0001, now, Math.max(0.01, rel / 3)); }
-    }
-    this.gain.gain.setValueAtTime(0, rampEnd + 0.008);
-    if (onEnded) this.osc.onended = onEnded as any;
-    this.osc.stop(rampEnd + 0.010);
+    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+    this.gain.gain.setValueCurveAtTime(curve, now, rel);
+    this.osc.stop(now + rel + 0.005);
+    this.osc.onended = () => onEnded?.();
   }
 }
 
-// ------------------------------ Component ------------------------------
+// Marker builders for any [start..end] absolute range
+function buildTetDataForRange(startStep: number, endStep: number, transpose12: number) {
+  const span = endStep - startStep + 1;
+  const cells: (string | null)[] = Array.from({ length: span }, () => null);
+  const deltaMap = new Map<number, number>(); // abs step -> cents delta
+  for (let s = 0; s <= 12; s++) {
+    const idealCents = s * 100;
+    const absolute = Math.round((STEPS * s) / 12);
+    if (absolute < startStep || absolute > endStep) continue;
+    const midi = D4_MIDI + transpose12 + s;
+    const name = NOTE_NAMES[(midi % 12 + 12) % 12];
+    cells[absolute - startStep] = name;
+    const snappedCents = absolute * CENTS_PER_STEP;
+    deltaMap.set(absolute, snappedCents - idealCents);
+  }
+  return { cells, deltaMap };
+}
+function buildJustCellsForRange(startStep: number, endStep: number) {
+  const intervals: { name: string; ratio: number }[] = [
+    { name: '1/1', ratio: 1/1 }, { name: '16/15', ratio: 16/15 }, { name: '9/8', ratio: 9/8 },
+    { name: '6/5', ratio: 6/5 }, { name: '5/4', ratio: 5/4 }, { name: '4/3', ratio: 4/3 },
+    { name: '45/32', ratio: 45/32 }, { name: '3/2', ratio: 3/2 }, { name: '8/5', ratio: 8/5 },
+    { name: '5/3', ratio: 5/3 }, { name: '15/8', ratio: 15/8 }, { name: '2/1', ratio: 2/1 },
+  ];
+  const span = endStep - startStep + 1;
+  const cells: (string | null)[] = Array.from({ length: span }, () => null);
+  for (const it of intervals) {
+    const abs = Math.round(cents(it.ratio) / CENTS_PER_STEP);
+    if (abs >= startStep && abs <= endStep) cells[abs - startStep] = it.name;
+  }
+  return cells;
+}
+
+// --- Reusable keyboard surface ---
+type KomaKeyboardProps = {
+  title?: string;
+  startStep: number;
+  endStep: number; // inclusive
+  cesniAbsSteps: Set<number>;
+  showTet: boolean;
+  showJust: boolean;
+  tetData: { cells: (string | null)[]; deltaMap: Map<number, number> };
+  justCells: (string | null)[];
+  onPointerDown: (step: number) => (e: React.PointerEvent) => void;
+  onPointerEnter: (step: number) => (e: React.PointerEvent) => void;
+  onPointerUp: (e: React.PointerEvent) => void;
+  onPointerCancel: (e: React.PointerEvent) => void;
+  glowCounts: React.MutableRefObject<Map<number, number>>;
+  fadeInfo: React.MutableRefObject<Map<number, { startedAt: number; durationMs: number }>>;
+  tetRowRef?: React.RefObject<HTMLDivElement>;
+  isTouch: boolean;
+  tetTip?: { left: number; text: string } | null;
+  onTetPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onTetPointerMove?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onTetPointerEnd?: (e: React.PointerEvent<HTMLDivElement>) => void;
+};
+
+function KomaKeyboard(props: KomaKeyboardProps) {
+  const {
+    title, startStep, endStep, cesniAbsSteps, showTet, showJust,
+    tetData, justCells, onPointerDown, onPointerEnter, onPointerUp, onPointerCancel,
+    glowCounts, fadeInfo, tetRowRef, isTouch, tetTip, onTetPointerDown, onTetPointerMove, onTetPointerEnd,
+  } = props;
+
+  const span = endStep - startStep + 1;
+  const keys = React.useMemo(
+    () => Array.from({ length: span }, (_, i) => {
+      const s = startStep + i;
+      return { absStep: s, cents: s * CENTS_PER_STEP };
+    }),
+    [startStep, endStep]
+  );
+
+  const tetStepSet = React.useMemo(() => new Set<number>(
+    tetData.cells.map((lbl, i) => (lbl ? (startStep + i) : -1)).filter(i => i >= 0)
+  ), [tetData, startStep]);
+
+  const justStepSet = React.useMemo(() => new Set<number>(
+    justCells.map((lbl, i) => (lbl ? (startStep + i) : -1)).filter(i => i >= 0)
+  ), [justCells, startStep]);
+
+  return (
+    <div className="rounded-2xl bg-neutral-900 p-4 shadow-inner space-y-3">
+      {title && <div className="text-sm text-neutral-300 font-semibold">{title}</div>}
+
+      <div
+        className="grid gap-1 p-3 rounded-xl bg-neutral-950/40 w-full overflow-x-hidden"
+        style={{ touchAction: 'none', gridTemplateColumns: `repeat(${span}, minmax(0, 1fr))` }}
+      >
+        {keys.map((k) => {
+          const count = glowCounts.current.get(k.absStep) || 0;
+          const fade = fadeInfo.current.get(k.absStep);
+          const isAlive = count > 0;
+          const isCesni = cesniAbsSteps.has(k.absStep);
+
+          let colorClass = 'bg-neutral-300 border-neutral-400';
+          let styleOverride: React.CSSProperties | undefined = undefined;
+          if (isCesni) {
+            if (tetStepSet.has(k.absStep)) {
+              colorClass = 'bg-green-600 border-green-800';
+            } else if (justStepSet.has(k.absStep)) {
+              colorClass = 'border-neutral-400';
+              styleOverride = { background: '#E20074', borderColor: '#b1005a' };
+            } else {
+              colorClass = 'bg-yellow-400 border-yellow-600';
+            }
+          }
+
+          const opacity = !fade && isAlive ? 1 : 0;
+          const durationMs = fade?.durationMs || 120;
+
+          return (
+            <div key={k.absStep}
+              className={`relative h-48 sm:h-56 md:h-64 rounded-2xl text-neutral-900 cursor-pointer border ${colorClass}`}
+              style={styleOverride}
+              onPointerDown={onPointerDown(k.absStep)}
+              onPointerEnter={onPointerEnter(k.absStep)}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onContextMenu={(e) => e.preventDefault()}
+              title={`Step ${k.absStep} • ${fmtCents(k.cents)} cents`}
+            >
+              <div className="absolute inset-0 rounded-2xl pointer-events-none"
+                   style={{
+                     boxShadow: '0 0 16px rgba(250,204,21,0.65)',
+                     outline: '4px solid rgba(250,204,21,1)',
+                     opacity,
+                     transitionProperty: 'opacity, box-shadow, outline-color',
+                     transitionDuration: `${durationMs}ms`,
+                   }} />
+              <div className="absolute left-1/2 -translate-x-1/2 top-[25%] text-xs sm:text-sm md:text-base font-extrabold leading-none drop-shadow-[0_1px_1px_rgba(0,0,0,0.3)]">
+                {k.absStep}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* markers */}
+      <div className="px-3 pb-2 space-y-1">
+        {showJust && (
+          <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${span}, minmax(0, 1fr))` }}>
+            {Array.from({ length: span }, (_, i) => (
+              <div key={`just-${startStep + i}`} className="h-8 flex items-center justify-center">
+                {justCells[i] ? (
+                  <div className="px-1.5 py-0.5 rounded-md text-[10px] sm:text-xs font-semibold text-white" style={{ background: '#E20074' }}>
+                    {justCells[i]}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showTet && (
+          <div
+            ref={tetRowRef}
+            className="relative"
+            style={{ touchAction: isTouch ? ('pan-y' as React.CSSProperties['touchAction']) : undefined }}
+            onPointerDown={onTetPointerDown}
+            onPointerMove={onTetPointerMove}
+            onPointerUp={onTetPointerEnd}
+            onPointerCancel={onTetPointerEnd}
+          >
+            <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${span}, minmax(0, 1fr))` }}>
+              {tetData.cells.map((label, i) => (
+                <div key={`tet-${startStep + i}`} className="h-8 flex items-center justify-center">
+                  {label ? (
+                    <div
+                      className="px-1.5 py-0.5 rounded-md text-[10px] sm:text-xs font-semibold"
+                      style={{ background: 'rgba(34,197,94,0.9)', color: '#052e16' }}
+                      title={!isTouch ? fmtSigned1(tetData.deltaMap.get(startStep + i) ?? 0) : undefined}
+                    >
+                      {label}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            {isTouch && tetTip && (
+              <div className="absolute -top-8 px-2 py-1 rounded-md text-[10px] font-semibold bg-neutral-100 text-neutral-900 shadow pointer-events-none"
+                   style={{ left: tetTip.left, transform: 'translateX(-50%)' }}>
+                {tetTip.text}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function FiftyThreeTETKeyboard() {
   // Synth params
-  const [waveform, setWaveform] = useState<OscillatorType>("sine");
+  const [waveform, setWaveform] = useState<OscillatorType>('sine');
   const [gain, setGain] = useState(0.15);
-  const [attack, setAttack] = useState(0.01);
-  const [release, setRelease] = useState(0.45); // 75% of 0.6s max
+  const [attack, setAttack] = useState(0.02);
+  const [release, setRelease] = useState(0.12);
   const [sustain, setSustain] = useState(false);
-  const [audioOpen, setAudioOpen] = useState(false);
+
+  // UI housekeeping
+  const selectOpenRef = useRef(false);
   const [isTouch, setIsTouch] = useState(false);
   const [lastTestRun, setLastTestRun] = useState<number | null>(null);
 
-  // Base pitch (12‑TET semitones from D4)
+  // Base pitch / markers
   const [transpose12, setTranspose12] = useState<number>(0);
-  // Marker visibility
   const [showTet, setShowTet] = useState(true);
   const [showJust, setShowJust] = useState(true);
 
-  // Çeşni selection (for highlights)
+  // Çeşni — Keyboard 1
   const [cesniId, setCesniId] = useState<string>('rast_penta');
   const [customStepsStr, setCustomStepsStr] = useState<string>('');
   const customParsed = useMemo(() => parseStepList(customStepsStr), [customStepsStr]);
@@ -190,10 +380,49 @@ export default function FiftyThreeTETKeyboard() {
     return CESNI_OPTIONS.find(o => o.id === cesniId)?.steps ?? [];
   }, [cesniId, customParsed]);
   const cesniSet = useMemo(() => new Set<number>(cesniSteps), [cesniSteps]);
+  const prevCesniIdRef = useRef<string>(cesniId);
+
+  // Dynamic kb1 range from lowest..highest highlighted (fallback 0..31)
+  const startStep1 = useMemo(() => (cesniSteps.length ? Math.min(...cesniSteps) : 0), [cesniSteps]);
+  const endStep1   = useMemo(() => (cesniSteps.length ? Math.max(...cesniSteps) : MAX_STEP), [cesniSteps]);
+  const spanKb1 = endStep1 - startStep1 + 1;
+
+  // Çeşni — Keyboard 2 (relative)
+  const [cesni2Id, setCesni2Id] = useState<string>('rast_tetra'); // default to Rast tetrachord
+  const [custom2StepsStr, setCustom2StepsStr] = useState<string>('');
+  const custom2Parsed = useMemo(() => parseStepList(custom2StepsStr), [custom2StepsStr]);
+  const cesni2RelSteps = useMemo(() => {
+    if (cesni2Id === 'custom') return custom2Parsed.error ? [] : custom2Parsed.steps;
+    return CESNI_OPTIONS.find(o => o.id === cesni2Id)?.steps ?? [];
+  }, [cesni2Id, custom2Parsed]);
+  const prevCesni2IdRef = useRef<string>(cesni2Id);
+
+  // kb2 starts at highest highlighted of kb1, ends minimally to include its own recipe
+  const highestStepKb1 = useMemo(() => (cesniSteps.length ? Math.max(...cesniSteps) : 31), [cesniSteps]);
+  const startStep2 = highestStepKb1;
+  const endStep2 = useMemo(() => {
+    const maxRel = cesni2RelSteps.length ? Math.max(...cesni2RelSteps) : 0;
+    return Math.min(ABS_MAX_STEP, startStep2 + maxRel);
+  }, [cesni2RelSteps, startStep2]);
+
+  const cesni2AbsSet = useMemo(
+    () => new Set<number>(cesni2RelSteps.map(s => startStep2 + s).filter(s => s >= startStep2 && s <= endStep2)),
+    [cesni2RelSteps, startStep2, endStep2]
+  );
+
+  // Base, names, markers
+  const baseFreq = useMemo(() => baseFreqFromSemitones(transpose12), [transpose12]);
+  const baseName = useMemo(() => midiNameFromSemis(transpose12), [transpose12]);
+
+  const tetDataKb1 = useMemo(() => buildTetDataForRange(startStep1, endStep1, transpose12), [startStep1, endStep1, transpose12]);
+  const justCellsKb1 = useMemo(() => buildJustCellsForRange(startStep1, endStep1), [startStep1, endStep1]);
+
+  const tetDataKb2 = useMemo(() => buildTetDataForRange(startStep2, endStep2, transpose12), [startStep2, endStep2, transpose12]);
+  const justCellsKb2 = useMemo(() => buildJustCellsForRange(startStep2, endStep2), [startStep2, endStep2]);
 
   // Force re-render on ref map updates
   const [, setUiPulse] = useState(0);
-  const tick = () => setUiPulse((v) => (v + 1) % 1_000_000);
+  const tick = () => setUiPulse(v => (v + 1) % 1_000_000);
 
   // Audio
   const audioRef = useRef<AudioContext | null>(null);
@@ -201,163 +430,125 @@ export default function FiftyThreeTETKeyboard() {
     if (!audioRef.current) audioRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     return audioRef.current;
   };
+  const freqForStepFromBase = (step: number, base: number) => base * Math.pow(2, step / STEPS);
 
-  // Active voices and effects
-  const activePointers = useRef<Set<number>>(new Set());
-  const activeVoices = useRef<Map<number, { voice: Voice; step: number }>>(new Map());
-  const latchedVoices = useRef<Map<number, Voice>>(new Map());
-  const activeKeys = useRef<Map<string, { voice: Voice; step: number }>>(new Map());
-  const glowCounts = useRef<Map<number, number>>(new Map());
-  const fadeInfo = useRef<Map<number, { startedAt: number; durationMs: number }>>(new Map()); // step → fade state
+  // Active voices
+  const activeVoices = useRef(new Map<number, { voice: Voice; step: number }>());
+  const activePointers = useRef(new Map<number, number>());
+  const activeKeys = useRef(new Map<string, { voice: Voice; step: number }>());
+  const latchedVoices = useRef(new Map<number, Voice>());
 
-  // Hotkey guards (Option A + select-open handling)
-  const selectOpenRef = useRef(false);
-
-  // Touch tooltip state for 12‑TET row (press‑and‑scrub)
-  const tetRowRef = useRef<HTMLDivElement | null>(null);
-  const isScrubbingTet = useRef(false);
-  const tetTipStepRef = useRef<number | null>(null);
-  const [tetTip, setTetTip] = useState<{ left: number; text: string } | null>(null);
-
-  const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-
-  // Inline self-test runner (logs to console)
-  const runSelfTestsInline = () => {
-    const T = (window as any).__testables_53tet;
-    if (!T) { console.warn("⛔ __testables_53tet not found. Open this app preview first."); return; }
-    const {
-      D4_FREQ, STEPS, R, CENTS_PER_STEP,
-      baseFreqFromSemitones, freqForStepFromBase, cents, fmtSigned1,
-      nearestFromSet, visualReleaseMs, parseStepList, resolveStepForKey,
-      CESNI_OPTIONS,
-    } = T;
-    const ok = (m: string) => console.log('✅ '+m);
-    const bad = (m: string) => console.warn('❌ '+m);
-    const close = (a: number, b: number, t: number) => Math.abs(a-b) <= t;
-    console.groupCollapsed('53-TET Self-tests');
-    try {
-      close(Math.pow(R,53), 2, 1e-6) ? ok('(2^(1/53))^53 ≈ 2') : bad('ratio');
-      close(31*CENTS_PER_STEP, 701.955, 0.5) ? ok('31 steps ≈ perfect fifth') : bad('fifth');
-      close(baseFreqFromSemitones(0), D4_FREQ, 0.02) ? ok('base semitones 0 = D4') : bad('base semitones 0');
-      // Extra usage to satisfy TS (and verify correctness)
-      close(freqForStepFromBase(0, D4_FREQ), D4_FREQ, 1e-4) ? ok('freqForStepFromBase step0 = base') : bad('freqForStepFromBase');
-      (fmtSigned1(-3.25) === "-3.3 cents") ? ok('fmtSigned1 rounding') : bad('fmtSigned1');
-      const tetSteps = Array.from({length:8},(_,s)=> Math.round((STEPS*s)/12));
-      JSON.stringify(tetSteps)===JSON.stringify([0,4,9,13,18,22,27,31]) ? ok('12‑TET markers') : bad('12‑TET markers');
-      const justSteps = [1/1,16/15,9/8,6/5,5/4,4/3,45/32,3/2].map((r:number)=> Math.round(cents(r)/CENTS_PER_STEP));
-      JSON.stringify(justSteps)===JSON.stringify([0,5,9,14,17,22,26,31]) ? ok('Just markers') : bad('Just markers');
-      const byId = (id: string)=> CESNI_OPTIONS.find((o:any)=>o.id===id)?.steps || [];
-      JSON.stringify(byId('huseyni_penta'))===JSON.stringify([0,8,13,22,31]) ? ok('Huseyni def') : bad('Huseyni def');
-      parseStepList('32').error ? ok('parse range error') : bad('parse range');
-      resolveStepForKey('g',[0,8,13,22])===null ? ok('G ignored for tetrachord') : bad('G mapping');
-      nearestFromSet(12,new Set([0,4,9,13,18,22,27,31]))===13 ? ok('nearestFromSet') : bad('nearestFromSet');
-      (visualReleaseMs(0.05) >= 90) ? ok('visualReleaseMs floor') : bad('visualReleaseMs');
-    } finally {
-      console.groupEnd();
-      setLastTestRun(Date.now());
-    }
-  };
-
-  const incGlow = (step: number) => {
-    const m = glowCounts.current; m.set(step, (m.get(step) || 0) + 1);
-    fadeInfo.current.delete(step);
-    tick();
-  };
-  const maybeBeginFade = (step: number) => {
-    const count = glowCounts.current.get(step) || 0;
-    if (count <= 1) {
-      fadeInfo.current.set(step, { startedAt: nowMs(), durationMs: visualReleaseMs(release) });
-      tick();
-    }
-  };
-  const decGlow = (step: number) => {
-    const m = glowCounts.current; const next = (m.get(step) || 0) - 1;
-    if (next <= 0) { m.delete(step); fadeInfo.current.delete(step); } else { m.set(step, next); }
-    tick();
-  };
-
-  // UI readouts
+  // Visuals
+  const glowCounts = useRef(new Map<number, number>());
+  const fadeInfo = useRef(new Map<number, { startedAt: number; durationMs: number }>());
+  const incGlow = (step: number) => { glowCounts.current.set(step, (glowCounts.current.get(step) || 0) + 1); tick(); };
+  const decGlow = (step: number) => { const v = (glowCounts.current.get(step) || 0) - 1; if (v <= 0) glowCounts.current.delete(step); else glowCounts.current.set(step, v); tick(); };
+  const maybeBeginFade = (step: number) => { const ms = visualReleaseMs(release); fadeInfo.current.set(step, { startedAt: performance.now(), durationMs: ms }); setTimeout(() => { fadeInfo.current.delete(step); tick(); }, ms + 10); };
   const [activeHz, setActiveHz] = useState<number | null>(null);
   const [activeStep, setActiveStep] = useState<number | null>(null);
 
-  // Keys metadata 0..31
-  const keys = useMemo(() => Array.from({ length: KEYS_COUNT }, (_, n) => ({ step: n, cents: n * CENTS_PER_STEP })), []);
+  // 12-TET row tooltip (kb1 dynamic)
+  const tetRowRef = useRef<HTMLDivElement | null>(null);
+  const [tetTip, setTetTip] = useState<{ left: number; text: string } | null>(null);
 
-  const baseFreq = useMemo(() => baseFreqFromSemitones(transpose12), [transpose12]);
-  const baseName = useMemo(() => midiNameFromSemis(transpose12), [transpose12]);
-
-  // 12‑TET markers snapped to nearest koma (0..7 semitones → 0..31 steps)
-  const tetData = useMemo(() => {
-    const deltaMap = new Map<number, number>();
-    const cells: (string | null)[] = Array.from({ length: KEYS_COUNT }, () => null);
-    for (let s = 0; s <= 7; s++) {
-      const idealCents = s * 100; // exact 12‑TET position in cents
-      const step = Math.round((STEPS * s) / 12); // nearest 53‑TET step
-      if (step >= 0 && step <= MAX_STEP) {
-        const midi = D4_MIDI + transpose12 + s;
-        const name = NOTE_NAMES[(midi % 12 + 12) % 12];
-        cells[step] = name;
-        const snappedCents = step * CENTS_PER_STEP;
-        deltaMap.set(step, snappedCents - idealCents);
-      }
+  // ------- Per-key pointer handlers -------
+  const onPointerDown = (step: number) => (e: React.PointerEvent) => {
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (sustain) { toggleLatched(step); return; }
+    startForPointer(e.pointerId, step);
+  };
+  const onPointerEnter = (step: number) => (e: React.PointerEvent) => {
+    if ((e.buttons & 1) === 1 && activePointers.current.has(e.pointerId)) {
+      retuneForPointer(e.pointerId, step);
     }
-    return { cells, deltaMap };
-  }, [transpose12]);
+  };
+  const onPointerUp = (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
+  const onPointerCancel = (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
 
-  // Just (5‑limit) markers snapped to nearest koma across 0..31
-  const justCells = useMemo(() => {
-    const intervals: { name: string; ratio: number }[] = [
-      { name: '1/1', ratio: 1/1 },
-      { name: '16/15', ratio: 16/15 },
-      { name: '9/8', ratio: 9/8 },
-      { name: '6/5', ratio: 6/5 },
-      { name: '5/4', ratio: 5/4 },
-      { name: '4/3', ratio: 4/3 },
-      { name: '45/32', ratio: 45/32 },
-      { name: '3/2', ratio: 3/2 },
-    ];
-    const map = new Map<number, string>();
-    for (const it of intervals) {
-      const step = Math.round(cents(it.ratio) / CENTS_PER_STEP);
-      if (step >= 0 && step <= MAX_STEP) map.set(step, it.name);
+  // Start/stop helpers
+  const startVoice = (step: number) => {
+    const ctx = getCtx();
+    const f = freqForStepFromBase(step, baseFreq);
+    const v = new Voice(ctx, waveform, f, gain, attack);
+    incGlow(step);
+    setActiveHz(f); setActiveStep(step);
+    return v;
+  };
+  const startForKey = (key: string, step: number) => {
+    const v = startVoice(step);
+    activeKeys.current.set(key, { voice: v, step });
+  };
+  const stopForKey = (key: string) => {
+    const ent = activeKeys.current.get(key);
+    if (!ent) return;
+    const { voice, step } = ent;
+    maybeBeginFade(step);
+    voice.stop(release, () => decGlow(step));
+    activeKeys.current.delete(key);
+  };
+
+  const startForPointer = (pointerId: number, step: number) => {
+    const v = startVoice(step);
+    activePointers.current.set(pointerId, step);
+    activeVoices.current.set(pointerId, { voice: v, step });
+  };
+  const retuneForPointer = (pointerId: number, step: number) => {
+    const ent = activeVoices.current.get(pointerId);
+    if (!ent) return;
+    const { voice } = ent;
+    const f = freqForStepFromBase(step, baseFreq);
+    voice.setFrequency(f);
+    incGlow(step);
+    setActiveHz(f); setActiveStep(step);
+    activeVoices.current.set(pointerId, { voice, step });
+  };
+  const stopForPointer = (pointerId: number) => {
+    const ent = activeVoices.current.get(pointerId);
+    if (!ent) return;
+    const { voice, step } = ent;
+    maybeBeginFade(step);
+    voice.stop(release, () => decGlow(step));
+    activeVoices.current.delete(pointerId);
+    activePointers.current.delete(pointerId);
+  };
+
+  const toggleLatched = (step: number) => {
+    const v = latchedVoices.current.get(step);
+    if (v) {
+      maybeBeginFade(step);
+      v.stop(release, () => decGlow(step));
+      latchedVoices.current.delete(step);
+    } else {
+      const ctx = getCtx();
+      const f = freqForStepFromBase(step, baseFreq);
+      const newV = new Voice(ctx, waveform, f, gain, attack);
+      latchedVoices.current.set(step, newV);
+      incGlow(step); setActiveHz(f); setActiveStep(step);
     }
-    const cells: (string | null)[] = Array.from({ length: KEYS_COUNT }, () => null);
-    map.forEach((label, step) => { cells[step] = label; });
-    return cells;
-  }, []);
+    tick();
+  };
 
-  // Sets for coloring Çeşni keys by alignment
-  const tetStepSet = useMemo(() => new Set<number>(tetData.cells.map((lbl, i) => (lbl ? i : -1)).filter(i => i >= 0)), [tetData]);
-  const justStepSet = useMemo(() => new Set<number>(justCells.map((lbl, i) => (lbl ? i : -1)).filter(i => i >= 0)), [justCells]);
-
-  // Housekeeping
   const allOff = () => {
     activeVoices.current.forEach(({ voice, step }) => { maybeBeginFade(step); voice.stop(release, () => decGlow(step)); });
     activeVoices.current.clear();
     activePointers.current.clear();
     activeKeys.current.forEach(({ voice, step }) => { maybeBeginFade(step); voice.stop(release, () => decGlow(step)); });
     activeKeys.current.clear();
-    latchedVoices.current.forEach((v, step) => { maybeBeginFade(step); v.stop(release, () => decGlow(step)); });
+    latchedVoices.current.forEach((voice, step) => { maybeBeginFade(step); voice.stop(release, () => decGlow(step)); });
     latchedVoices.current.clear();
     setActiveHz(null); setActiveStep(null); tick();
   };
 
   useEffect(() => () => { allOff(); audioRef.current?.close?.(); }, []);
-
-  // Detect touch-capable (phone/tablet) to hide desktop keyboard tips & enable touch tooltip
   useEffect(() => {
     try {
       const w = window as any;
-      const touch = 'ontouchstart' in w || (navigator && (navigator.maxTouchPoints > 0 || (navigator as any).msMaxTouchPoints > 0));
+      const touch = 'ontouchstart' in w || (navigator && ((navigator as any).maxTouchPoints > 0 || (navigator as any).msMaxTouchPoints > 0));
       setIsTouch(!!touch);
     } catch { setIsTouch(false); }
   }, []);
-
-  // Update ALL voices when parameters change
-  useEffect(() => { activeVoices.current.forEach(({ voice }) => voice.setGain(gain)); latchedVoices.current.forEach((v) => v.setGain(gain)); }, [gain]);
-  useEffect(() => { activeVoices.current.forEach(({ voice }) => voice.setWaveform(waveform)); latchedVoices.current.forEach((v) => v.setWaveform(waveform)); }, [waveform]);
-
-  // Retune currently held (pointer‑down) voices if base transposes
+  useEffect(() => { activeVoices.current.forEach(({ voice }) => voice.setGain(gain)); latchedVoices.current.forEach(v => v.setGain(gain)); }, [gain]);
+  useEffect(() => { activeVoices.current.forEach(({ voice }) => voice.setWaveform(waveform)); latchedVoices.current.forEach(v => v.setWaveform(waveform)); }, [waveform]);
   useEffect(() => {
     activeVoices.current.forEach(({ voice, step }) => {
       const f = freqForStepFromBase(step, baseFreq);
@@ -365,128 +556,149 @@ export default function FiftyThreeTETKeyboard() {
     });
   }, [transpose12, baseFreq]);
 
-  // Start/retune/stop helpers for drag voices
-  const startForPointer = (pointerId: number, step: number) => {
-    const ctx = getCtx(); const f = freqForStepFromBase(step, baseFreq);
-    const voice = new Voice(ctx, waveform, f, gain, attack);
-    activePointers.current.add(pointerId);
-    activeVoices.current.set(pointerId, { voice, step });
-    incGlow(step); setActiveHz(f); setActiveStep(step);
-  };
-  const retuneForPointer = (pointerId: number, step: number) => {
-    const entry = activeVoices.current.get(pointerId); if (!entry) return;
-    const prev = entry.step; if (prev !== step) { decGlow(prev); incGlow(step); }
-    entry.step = step; const f = freqForStepFromBase(step, baseFreq);
-    entry.voice.setFrequency(f); setActiveHz(f); setActiveStep(step);
-  };
-  const stopForPointer = (pointerId: number) => {
-    const entry = activeVoices.current.get(pointerId); if (!entry) return;
-    const step = entry.step; maybeBeginFade(step); entry.voice.stop(release, () => decGlow(step));
-    activeVoices.current.delete(pointerId); activePointers.current.delete(pointerId);
-  };
-
-  // Keyboard start/stop (non-sustain behaves like mouse drag; sustain toggles)
-  const startForKey = (key: string, step: number) => {
-    if (activeKeys.current.has(key)) return;
-    const ctx = getCtx(); const f = freqForStepFromBase(step, baseFreq);
-    const voice = new Voice(ctx, waveform, f, gain, attack);
-    activeKeys.current.set(key, { voice, step }); incGlow(step); setActiveHz(f); setActiveStep(step);
-  };
-  const stopForKey = (key: string) => {
-    const entry = activeKeys.current.get(key); if (!entry) return;
-    const step = entry.step; maybeBeginFade(step); entry.voice.stop(release, () => decGlow(step)); activeKeys.current.delete(key);
-  };
-
-  // Sustain toggle logic (tap a key to start/stop that step)
-  const toggleLatched = (step: number) => {
-    const existing = latchedVoices.current.get(step);
-    if (existing) { maybeBeginFade(step); existing.stop(release, () => decGlow(step)); latchedVoices.current.delete(step);
-      if (activeVoices.current.size === 0 && latchedVoices.current.size === 0) { setActiveHz(null); setActiveStep(null); }
-      return; }
-    const ctx = getCtx(); const f = freqForStepFromBase(step, baseFreq);
-    const voice = new Voice(ctx, waveform, f, gain, attack);
-    latchedVoices.current.set(step, voice); incGlow(step); setActiveHz(f); setActiveStep(step);
-  };
-
-  // Global pointerup/cancel in case release happens off keyboard
-  useEffect(() => {
-    const handleUp = (e: PointerEvent) => stopForPointer(e.pointerId);
-    const handleCancel = (e: PointerEvent) => stopForPointer(e.pointerId);
-    window.addEventListener("pointerup", handleUp);
-    window.addEventListener("pointercancel", handleCancel);
-    return () => { window.removeEventListener("pointerup", handleUp); window.removeEventListener("pointercancel", handleCancel); };
-  }, [release]);
-
-  // Keyboard handlers: A,S,D,F,G map to degrees of current çeşni (with typing guard & select-open guard)
+  // Keyboard handlers: allow playing even if inputs/selects are focused
   useEffect(() => {
     const isTextEntry = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
-      return !!el.closest('input[type="text"], input[type="email"], input[type="search"], input[type="url"], input[type="number"], input[type="password"], textarea, [contenteditable="true"]');
+      return !!el.closest('input, textarea, [contenteditable="true"]');
     };
+
+    const orderKb1 = ['a','s','d','f','g'];
+    const orderKb2 = ['h','j','k','l',';'];
+    const playableKeys = new Set([...orderKb1, ...orderKb2]);
+
     const down = (e: KeyboardEvent) => {
-      if (isTextEntry(e.target)) return; if (selectOpenRef.current) return;
-      const step = resolveStepForKey(e.key, cesniSteps); if (step === null) return; e.preventDefault();
-      if (sustain) { if (e.repeat) return; toggleLatched(step); return; }
-      if (e.repeat) return; startForKey(e.key.toLowerCase(), step);
+      const k = e.key.toLowerCase();
+
+      // If a text input / textarea or select is active, only intercept playable keys
+      const focusedElsewhere = isTextEntry(e.target) || selectOpenRef.current;
+      if (focusedElsewhere && !playableKeys.has(k)) return;
+      if (e.repeat) return;
+
+      let step: number | null = null;
+
+      const s1 = resolveStepForKeyWithOrder(k, cesniSteps, orderKb1);
+      if (s1 !== null) step = s1;
+
+      if (step === null) {
+        const rel2 = resolveStepForKeyWithOrder(k, cesni2RelSteps, orderKb2);
+        if (rel2 !== null) step = startStep2 + rel2;
+      }
+      if (step === null) return;
+
+      e.preventDefault();
+      if (sustain) { toggleLatched(step); return; }
+      startForKey(k, step);
     };
+
     const up = (e: KeyboardEvent) => {
-      if (isTextEntry(e.target)) return; if (selectOpenRef.current) return;
-      const step = resolveStepForKey(e.key, cesniSteps); if (step === null) return;
-      if (sustain) return; stopForKey(e.key.toLowerCase());
+      const k = e.key.toLowerCase();
+      const focusedElsewhere = isTextEntry(e.target) || selectOpenRef.current;
+      if (focusedElsewhere && !playableKeys.has(k)) return;
+
+      const matchKb1 = resolveStepForKeyWithOrder(k, cesniSteps, orderKb1) !== null;
+      const matchKb2 = resolveStepForKeyWithOrder(k, cesni2RelSteps, orderKb2) !== null;
+      if (!matchKb1 && !matchKb2) return;
+      if (sustain) return;
+      e.preventDefault();
+      stopForKey(k);
     };
-    window.addEventListener('keydown', down); window.addEventListener('keyup', up);
+
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
-  }, [cesniSteps, sustain, waveform, gain, attack, release, baseFreq]);
+  }, [cesniSteps, cesni2RelSteps, startStep2, sustain, waveform, gain, attack, release, baseFreq]);
 
-  // Per‑key handlers
-  const onPointerDown = (step: number) => (e: React.PointerEvent) => { e.preventDefault(); if (sustain) { toggleLatched(step); return; } startForPointer(e.pointerId, step); };
-  const onPointerEnter = (step: number) => (e: React.PointerEvent) => { if (!sustain && activePointers.current.has(e.pointerId)) retuneForPointer(e.pointerId, step); };
-  const onPointerUp = (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
-  const onPointerCancel = (e: React.PointerEvent) => { if (!sustain) stopForPointer(e.pointerId); };
-
-  // --- Touch tooltip: press‑and‑scrub over 12‑TET marker row ---
+  // Touch tooltip over kb1 12-TET marker row (dynamic span)
   const updateTetTipFromClientX = (clientX: number) => {
     if (!tetRowRef.current) return;
     const rect = tetRowRef.current.getBoundingClientRect();
-    const colWidth = rect.width / KEYS_COUNT;
-    let approx = Math.round((clientX - rect.left) / colWidth);
-    approx = Math.max(0, Math.min(MAX_STEP, approx));
-    let step = approx;
-    const tetStepsAvail = new Set<number>(tetData.cells.map((lbl, i) => (lbl ? i : -1)).filter(i => i >= 0));
-    if (!tetStepsAvail.has(step)) step = nearestFromSet(step, tetStepsAvail);
-    const delta = tetData.deltaMap.get(step) ?? 0;
-    const label = tetData.cells[step] ?? '';
-    const left = step * colWidth + colWidth / 2;
-    const text = `${label} ${fmtSigned1(delta)}`;
-    if (tetTipStepRef.current !== step) { try { (navigator as any).vibrate?.(10); } catch {} tetTipStepRef.current = step; }
-    setTetTip({ left, text });
+    const colWidth = rect.width / spanKb1;
+    let approxIndex = Math.round((clientX - rect.left) / colWidth);
+    approxIndex = Math.max(0, Math.min(spanKb1 - 1, approxIndex));
+    let stepAbs = startStep1 + approxIndex;
+
+    const tetStepsAvail = new Set<number>(
+      tetDataKb1.cells.map((lbl, i) => (lbl ? (startStep1 + i) : -1)).filter(i => i >= 0)
+    );
+    if (!tetStepsAvail.has(stepAbs)) {
+      const near = nearestFromSet(stepAbs, tetStepsAvail);
+      if (near !== null) stepAbs = near;
+    }
+    const dx = ((stepAbs - startStep1) + 0.5) * colWidth;
+    const centsDelta = tetDataKb1.deltaMap.get(stepAbs) ?? 0;
+    const label = tetDataKb1.cells[stepAbs - startStep1] ?? '';
+    setTetTip({ left: rect.left + dx, text: `${label} (${fmtSigned1(centsDelta)})` });
   };
-  const onTetPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isTouch && e.pointerType !== 'touch') return;
-    isScrubbingTet.current = true; e.currentTarget.setPointerCapture?.(e.pointerId); updateTetTipFromClientX(e.clientX);
+  const onTetPointerDown = (e: React.PointerEvent<HTMLDivElement>) => { if (!isTouch) return; updateTetTipFromClientX(e.clientX); };
+  const onTetPointerMove = (e: React.PointerEvent<HTMLDivElement>) => { if (!isTouch) return; updateTetTipFromClientX(e.clientX); };
+  const onTetPointerEnd = () => setTetTip(null);
+
+  // Prefill "custom" with the previously-selected recipe (kb1)
+  const handleCesni1Change = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newId = (e.target as HTMLSelectElement).value;
+    if (newId === 'custom') {
+      const prevId = prevCesniIdRef.current;
+      const prevSteps =
+        prevId === 'custom'
+          ? (customParsed.error ? [] : customParsed.steps)
+          : (CESNI_OPTIONS.find(o => o.id === prevId)?.steps ?? []);
+      if (prevSteps.length) setCustomStepsStr(prevSteps.join(' '));
+    }
+    setCesniId(newId);
+    prevCesniIdRef.current = newId;
+    selectOpenRef.current = false;
+    (e.target as HTMLSelectElement).blur();
   };
-  const onTetPointerMove = (e: React.PointerEvent<HTMLDivElement>) => { if (!isScrubbingTet.current) return; updateTetTipFromClientX(e.clientX); };
-  const onTetPointerEnd = (e: React.PointerEvent<HTMLDivElement>) => { if (!isScrubbingTet.current) return; isScrubbingTet.current = false; setTetTip(null); tetTipStepRef.current = null; try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {} };
+
+  // Prefill for kb2 custom
+  const handleCesni2Change = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newId = (e.target as HTMLSelectElement).value;
+    if (newId === 'custom') {
+      const prevId = prevCesni2IdRef.current;
+      const prevSteps =
+        prevId === 'custom'
+          ? (custom2Parsed.error ? [] : custom2Parsed.steps)
+          : (CESNI_OPTIONS.find(o => o.id === prevId)?.steps ?? []);
+      if (prevSteps.length) setCustom2StepsStr(prevSteps.join(' '));
+    }
+    setCesni2Id(newId);
+    prevCesni2IdRef.current = newId;
+    selectOpenRef.current = false;
+    (e.target as HTMLSelectElement).blur();
+  };
 
   // ------------------------------ Render ------------------------------
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 p-6">
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Title */}
+        {/* Header */}
         <header className="flex flex-col gap-2">
-          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Makam Klavyesi | 0-31 (tam beşli aralığı)</h1>
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Makam Klavyesi | Dinamik Aralıklar</h1>
           <p className="text-neutral-300 text-sm">
-            Range: 0–31 komas (≈ perfect fifth). Default base = D4 = {fmtHz(D4_FREQ)} Hz. Each step ≈ {CENTS_PER_STEP.toFixed(2)} cents.
+            Each step ≈ {CENTS_PER_STEP.toFixed(2)} cents. Base pitch defaults to {fmtHz(D4_FREQ)} Hz (D4).
           </p>
           <div className="flex items-center gap-3">
-            <button onClick={runSelfTestsInline} className="px-2 py-1 rounded-md bg-neutral-800 hover:bg-neutral-700 text-xs">Run self-tests (console)</button>
-            {lastTestRun ? (
-              <span className="text-[11px] text-neutral-400">Last run: {new Date(lastTestRun).toLocaleTimeString()}</span>
-            ) : null}
+            <button onClick={() => {
+              try {
+                const T = (window as any).__testables_53tet;
+                const { R, baseFreqFromSemitones } = T;
+                const ok = (m: string) => console.log('✅ '+m);
+                const bad = (m: string) => console.warn('❌ '+m);
+                const close = (a: number, b: number, t: number) => Math.abs(a-b) <= t;
+                console.groupCollapsed('53-TET Self-tests');
+                try {
+                  close(Math.pow(R,53), 2, 1e-6) ? ok('(2^(1/53))^53 ≈ 2') : bad('ratio');
+                  close(baseFreqFromSemitones(0), D4_FREQ, 0.02) ? ok('base semitones 0 = D4') : bad('base semitones 0');
+                } finally { console.groupEnd(); }
+              } catch (e) { console.warn(e); }
+              setLastTestRun(Date.now());
+            }} className="px-2 py-1 rounded-md bg-neutral-800 hover:bg-neutral-700 text-xs">Run self-tests (console)</button>
+            {lastTestRun ? <span className="text-[11px] text-neutral-400">Last run: {new Date(lastTestRun).toLocaleTimeString()}</span> : null}
           </div>
         </header>
 
-        {/* Starting pitch + Markers */}
+        {/* Starting pitch + markers toggle */}
         <div className="rounded-2xl bg-neutral-900 p-4 space-y-3">
           <h2 className="font-semibold">Starting pitch</h2>
           <div className="flex flex-wrap items-center gap-4 text-sm">
@@ -499,130 +711,150 @@ export default function FiftyThreeTETKeyboard() {
                 onBlur={() => (selectOpenRef.current = false)}
                 onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') selectOpenRef.current = false; }}
               >
-                {[
-                  { label: "C", semisFromD4: -2 },
-                  { label: "C#/Db", semisFromD4: -1 },
-                  { label: "D", semisFromD4: 0 },
-                  { label: "D#/Eb", semisFromD4: 1 },
-                  { label: "E", semisFromD4: 2 },
-                  { label: "F", semisFromD4: 3 },
-                  { label: "F#/Gb", semisFromD4: 4 },
-                  { label: "G", semisFromD4: 5 },
-                  { label: "G#/Ab", semisFromD4: 6 },
-                  { label: "A", semisFromD4: 7 },
-                  { label: "A#/Bb", semisFromD4: 8 },
-                  { label: "B", semisFromD4: 9 },
-                ].map((opt) => (
-                  <option key={opt.label} value={opt.semisFromD4}>{opt.label}</option>
+                {Array.from({ length: 25 }, (_, i) => i - 12).map(n => (
+                  <option key={n} value={n}>{midiNameFromSemis(n)}</option>
                 ))}
               </select>
             </label>
-            <div className="text-neutral-300">Current: <span className="font-mono">{baseName}</span> = <span className="font-mono">{fmtHz(baseFreq)} Hz</span></div>
-            <fieldset className="flex items-center gap-3 ml-auto">
-              <legend className="sr-only">Markers</legend>
-              <span className="text-neutral-300 mr-1">Markers:</span>
-              <label className="inline-flex items-center gap-1">
-                <input type="checkbox" checked={showTet} onChange={(e) => setShowTet(e.target.checked)} />
-                12‑TET
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2">12-TET markers
+                <input type="checkbox" checked={showTet} onChange={(e)=> setShowTet(e.target.checked)} />
               </label>
-              <label className="inline-flex items-center gap-1">
-                <input type="checkbox" checked={showJust} onChange={(e) => setShowJust(e.target.checked)} />
-                Just
-              </label>
-            </fieldset>
-          </div>
-        </div>
-
-        {/* Audio output (collapsible) */}
-        <div className="rounded-2xl bg-neutral-900 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold">Audio output</h2>
-            <button onClick={() => setAudioOpen(o => !o)} className="px-3 py-1 rounded-md bg-neutral-800 hover:bg-neutral-700 text-sm">
-              {audioOpen ? 'Hide' : 'Show'}
-            </button>
-          </div>
-          {audioOpen && (
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <label className="flex items-center gap-2">Waveform
-                <select
-                  className="bg-neutral-800 rounded px-2 py-1"
-                  value={waveform}
-                  onMouseDown={() => (selectOpenRef.current = true)}
-                  onChange={(e) => { setWaveform((e.target as HTMLSelectElement).value as OscillatorType); selectOpenRef.current = false; (e.target as HTMLSelectElement).blur(); }}
-                  onBlur={() => (selectOpenRef.current = false)}
-                  onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') selectOpenRef.current = false; }}
-                >
-                  <option value="sine">sine</option>
-                  <option value="triangle">triangle</option>
-                  <option value="square">square</option>
-                  <option value="sawtooth">sawtooth</option>
-                </select>
-              </label>
-              <label className="flex items-center gap-2">Gain
-                <input type="range" min={0.02} max={0.6} step={0.01} value={gain} onChange={(e) => setGain(parseFloat(e.target.value))} />
-              </label>
-              <label className="flex items-center gap-2">Attack
-                <input type="range" min={0} max={0.2} step={0.005} value={attack} onChange={(e) => setAttack(parseFloat(e.target.value))} />
-              </label>
-              <label className="flex items-center gap-2">Release
-                <input type="range" min={0.01} max={0.6} step={0.01} value={release} onChange={(e) => setRelease(parseFloat(e.target.value))} />
+              <label className="flex items-center gap-2">Just markers
+                <input type="checkbox" checked={showJust} onChange={(e)=> setShowJust(e.target.checked)} />
               </label>
             </div>
-          )}
+            {!isTouch && (
+              <p className="text-xs text-neutral-400">Hotkeys: <span className="font-mono">A S D F G</span> for Keyboard 1; <span className="font-mono">H J K L ;</span> for Keyboard 2. With <em>Sustain</em> on, keys toggle.</p>
+            )}
+          </div>
         </div>
 
-        {/* Çeşni selection */}
+        {/* Sound controls (RESTORED) */}
         <div className="rounded-2xl bg-neutral-900 p-4 space-y-3">
-          <h2 className="font-semibold">Çeşni selection</h2>
-          <div className="flex flex-wrap items-center gap-6 text-sm">
-            {/* Çeşni selector */}
-            <label className="flex items-center gap-2">Çeşni
+          <h2 className="font-semibold">Sound</h2>
+          <div className="grid sm:grid-cols-2 gap-4 text-sm items-center">
+            <label className="flex items-center gap-2">Waveform
               <select
                 className="bg-neutral-800 rounded px-2 py-1"
-                value={cesniId}
-                onMouseDown={() => (selectOpenRef.current = true)}
-                onChange={(e) => {
-                  const nextId = (e.target as HTMLSelectElement).value;
-
-                  // If switching to "custom", prefill the textbox with the current highlights
-                  if (nextId === 'custom' && cesniId !== 'custom' && cesniSteps.length) {
-                    // space-separated, per your example: "0 8 13 22 31"
-                    setCustomStepsStr(cesniSteps.join(' '));
-                  }
-
-                  setCesniId(nextId);
-                  selectOpenRef.current = false;
-                  (e.target as HTMLSelectElement).blur();
-                }}
-                onBlur={() => (selectOpenRef.current = false)}
-                onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') selectOpenRef.current = false; }}
+                value={waveform}
+                onChange={(e)=> setWaveform((e.target as HTMLSelectElement).value as OscillatorType)}
               >
-                {CESNI_OPTIONS.map((opt)=> (<option key={opt.id} value={opt.id}>{opt.label}</option>))}
+                <option value="sine">sine</option>
+                <option value="triangle">triangle</option>
+                <option value="square">square</option>
+                <option value="sawtooth">sawtooth</option>
               </select>
-              {cesniId === 'custom' && (
-                <span className="flex items-center gap-2">
-                  <input
-                    className="bg-neutral-800 rounded px-2 py-1 w-44"
-                    placeholder="e.g. 0,4,13,22,31"
-                    value={customStepsStr}
-                    onChange={(e)=> setCustomStepsStr(e.target.value)}
-                  />
-                  {customParsed.error ? (
-                    <span className="text-red-400 text-xs">{customParsed.error}</span>
-                  ) : (
-                    <span className="text-neutral-400 text-xs">0–31, comma/space separated</span>
-                  )}
-                </span>
-              )}
             </label>
+
+            <div className="flex items-center gap-3">
+              <span className="w-16 text-neutral-300">Gain</span>
+              <input type="range" min={0} max={0.6} step={0.01} value={gain} onChange={(e)=> setGain(parseFloat(e.target.value))} className="w-full" />
+              <span className="w-14 text-right font-mono">{gain.toFixed(2)}</span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="w-16 text-neutral-300">Attack</span>
+              <input type="range" min={0} max={0.2} step={0.005} value={attack} onChange={(e)=> setAttack(parseFloat(e.target.value))} className="w-full" />
+              <span className="w-14 text-right font-mono">{attack.toFixed(3)}s</span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="w-16 text-neutral-300">Release</span>
+              <input type="range" min={0.02} max={0.6} step={0.005} value={release} onChange={(e)=> setRelease(parseFloat(e.target.value))} className="w-full" />
+              <span className="w-14 text-right font-mono">{release.toFixed(3)}s</span>
+            </div>
           </div>
-          {!isTouch && (
-            <p className="text-xs text-neutral-400">Tip: Use your computer keyboard — <span className="font-mono">A S D F G</span> — to play the highlighted notes. With Sustain on, a key toggles its note; without Sustain, hold the key to play.</p>
-          )}
         </div>
 
-        {/* Keyboard card */}
-        <div className="rounded-2xl bg-neutral-900 p-4 shadow-inner space-y-3">
+        {/* KEYBOARD 2 container (on top) */}
+        <div className="rounded-2xl bg-neutral-900 p-4 shadow-inner space-y-4">
+          {/* Big selector as the title */}
+          <div className="flex flex-wrap items-center gap-4">
+            <select
+              className="bg-neutral-800/80 hover:bg-neutral-800 rounded-lg px-3 py-2 text-lg sm:text-2xl font-bold tracking-tight"
+              value={cesni2Id}
+              onMouseDown={() => (selectOpenRef.current = true)}
+              onChange={handleCesni2Change}
+              onBlur={() => (selectOpenRef.current = false)}
+              onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') selectOpenRef.current = false; }}
+              title="Çeşni (Keyboard 2)"
+            >
+              {CESNI_OPTIONS.map((opt)=> (<option key={opt.id} value={opt.id}>{opt.label}</option>))}
+            </select>
+
+            {cesni2Id === 'custom' && (
+              <span className="flex items-center gap-2">
+                <input
+                  className="bg-neutral-800 rounded px-2 py-2 w-52 text-sm"
+                  placeholder="relative e.g. 0 4 13 22 31"
+                  value={custom2StepsStr}
+                  onChange={(e)=> setCustom2StepsStr(e.target.value)}
+                />
+                {custom2Parsed.error ? (
+                  <span className="text-red-400 text-xs">{custom2Parsed.error}</span>
+                ) : (
+                  <span className="text-neutral-400 text-xs">0–31 relative to start</span>
+                )}
+              </span>
+            )}
+
+            <span className="text-neutral-400 text-xs">Start = highest highlighted on Keyboard 1 → <span className="font-mono">{startStep2}</span></span>
+          </div>
+
+          {/* Keyboard 2 surface */}
+          <KomaKeyboard
+            startStep={startStep2}
+            endStep={endStep2}
+            cesniAbsSteps={cesni2AbsSet}
+            showTet={showTet}
+            showJust={showJust}
+            tetData={tetDataKb2}
+            justCells={justCellsKb2}
+            onPointerDown={onPointerDown}
+            onPointerEnter={onPointerEnter}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            glowCounts={glowCounts}
+            fadeInfo={fadeInfo}
+            isTouch={isTouch}
+          />
+        </div>
+
+        {/* KEYBOARD 1 container (below) */}
+        <div className="rounded-2xl bg-neutral-900 p-4 shadow-inner space-y-4">
+          {/* Big selector as the title */}
+          <div className="flex flex-wrap items-center gap-4">
+            <select
+              className="bg-neutral-800/80 hover:bg-neutral-800 rounded-lg px-3 py-2 text-lg sm:text-2xl font-bold tracking-tight"
+              value={cesniId}
+              onMouseDown={() => (selectOpenRef.current = true)}
+              onChange={handleCesni1Change}
+              onBlur={() => (selectOpenRef.current = false)}
+              onKeyDown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') selectOpenRef.current = false; }}
+              title="Çeşni (Keyboard 1)"
+            >
+              {CESNI_OPTIONS.map((opt)=> (<option key={opt.id} value={opt.id}>{opt.label}</option>))}
+            </select>
+
+            {cesniId === 'custom' && (
+              <span className="flex items-center gap-2">
+                <input
+                  className="bg-neutral-800 rounded px-2 py-2 w-52 text-sm"
+                  placeholder="e.g. 0 8 13 22 31"
+                  value={customStepsStr}
+                  onChange={(e)=> setCustomStepsStr(e.target.value)}
+                />
+                {customParsed.error ? (
+                  <span className="text-red-400 text-xs">{customParsed.error}</span>
+                ) : (
+                  <span className="text-neutral-400 text-xs">0–31, space/comma separated</span>
+                )}
+              </span>
+            )}
+          </div>
+
+          {/* Base / activity strip */}
           <div className="flex flex-wrap items-center justify-between text-sm text-neutral-300 gap-2">
             <div>
               <span className="mr-2">Base:</span>
@@ -636,114 +868,37 @@ export default function FiftyThreeTETKeyboard() {
             </div>
           </div>
 
-          {/* Keyboard grid (32 equal columns = consistent key widths) */}
-          <div className="grid gap-1 p-3 rounded-xl bg-neutral-950/40 w-full overflow-x-hidden"
-               style={{ touchAction: 'none', gridTemplateColumns: `repeat(${KEYS_COUNT}, minmax(0, 1fr))` }}>
-            {keys.map((k) => {
-              const count = glowCounts.current.get(k.step) || 0;
-              const fade = fadeInfo.current.get(k.step);
-              const isAlive = count > 0;
-              const isCesni = cesniSet.has(k.step);
-              // Decide highlight color based on alignment precedence: TET (green) > Just (magenta) > neither (yellow)
-              let colorClass = 'bg-neutral-300 border-neutral-400';
-              let styleOverride: React.CSSProperties | undefined = undefined;
-              if (isCesni) {
-                if (tetStepSet.has(k.step)) {
-                  colorClass = 'bg-green-600 border-green-800';
-                } else if (justStepSet.has(k.step)) {
-                  colorClass = 'border-neutral-400';
-                  styleOverride = { background: '#E20074', borderColor: '#b1005a' };
-                } else {
-                  colorClass = 'bg-yellow-400 border-yellow-600';
-                }
-              }
-              const opacity = !fade && isAlive ? 1 : 0;
-              const durationMs = fade?.durationMs || 120;
-              return (
-                <div key={k.step}
-                  className={`relative h-48 sm:h-56 md:h-64 rounded-2xl text-neutral-900 cursor-pointer border ${colorClass}`}
-                  style={styleOverride}
-                  onPointerDown={onPointerDown(k.step)}
-                  onPointerEnter={onPointerEnter(k.step)}
-                  onPointerUp={onPointerUp}
-                  onPointerCancel={onPointerCancel}
-                  onContextMenu={(e) => e.preventDefault()}
-                  title={`Step ${k.step} • ${fmtCents(k.cents)} cents`}
-                >
-                  {/* Yellow glow overlay, opacity animated to match release tail */}
-                  <div className="absolute inset-0 rounded-2xl pointer-events-none"
-                       style={{
-                         boxShadow: '0 0 16px rgba(250,204,21,0.65)',
-                         outline: '4px solid rgba(250,204,21,1)',
-                         opacity,
-                         transitionProperty: 'opacity, box-shadow, outline-color',
-                         transitionDuration: `${durationMs}ms`,
-                       }} />
+          {/* Keyboard 1 surface */}
+          <KomaKeyboard
+            startStep={startStep1}
+            endStep={endStep1}
+            cesniAbsSteps={cesniSet}
+            showTet={showTet}
+            showJust={showJust}
+            tetData={tetDataKb1}
+            justCells={justCellsKb1}
+            onPointerDown={onPointerDown}
+            onPointerEnter={onPointerEnter}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            glowCounts={glowCounts}
+            fadeInfo={fadeInfo}
+            tetRowRef={tetRowRef}
+            isTouch={isTouch}
+            tetTip={tetTip}
+            onTetPointerDown={onTetPointerDown}
+            onTetPointerMove={onTetPointerMove}
+            onTetPointerEnd={onTetPointerEnd}
+          />
 
-                  {/* Koma number halfway between top and center; small to avoid overlap */}
-                  <div className="absolute left-1/2 -translate-x-1/2 top-[25%] text-xs sm:text-sm md:text-base font-extrabold leading-none drop-shadow-[0_1px_1px_rgba(0,0,0,0.3)]">
-                    {k.step}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Marker rows snapped to keys: separate rows so they never push each other */}
-          <div className="px-3 pb-2 space-y-1">
-            {showJust && (
-              <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${KEYS_COUNT}, minmax(0, 1fr))` }}>
-                {Array.from({ length: KEYS_COUNT }, (_, i) => (
-                  <div key={`just-${i}`} className="h-8 flex items-center justify-center">
-                    {justCells[i] ? (
-                      <div className="px-1.5 py-0.5 rounded-md text-[10px] sm:text-xs font-semibold text-white" style={{ background: '#E20074' }}>
-                        {justCells[i]}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {showTet && (
-              <div
-                ref={tetRowRef}
-                className="relative"
-                style={{ touchAction: isTouch ? 'pan-y' as React.CSSProperties['touchAction'] : undefined }}
-                onPointerDown={onTetPointerDown}
-                onPointerMove={onTetPointerMove}
-                onPointerUp={onTetPointerEnd}
-                onPointerCancel={onTetPointerEnd}
-              >
-                <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${KEYS_COUNT}, minmax(0, 1fr))` }}>
-                  {Array.from({ length: KEYS_COUNT }, (_, i) => (
-                    <div key={`tet-${i}`} className="h-8 flex items-center justify-center">
-                      {tetData.cells[i] ? (
-                        <div
-                          className="px-1.5 py-0.5 rounded-md text-[10px] sm:text-xs font-semibold"
-                          style={{ background: 'rgba(34,197,94,0.9)', color: '#052e16' }}
-                          title={!isTouch ? fmtSigned1(tetData.deltaMap.get(i) ?? 0) : undefined}
-                        >
-                          {tetData.cells[i]}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-                {isTouch && tetTip && (
-                  <div className="absolute -top-8 px-2 py-1 rounded-md text-[10px] font-semibold bg-neutral-100 text-neutral-900 shadow pointer-events-none" style={{ left: tetTip.left, transform: 'translateX(-50%)' }}>
-                    {tetTip.text}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          <p className="text-xs text-neutral-400">Markers snap to the nearest koma key. Rows are separate: <span style={{color:'#E20074'}}>Magenta</span> = common 5‑limit Just intervals; <span className="text-green-400">Green</span> = 12‑TET semitones relative to the chosen base.</p>
+          <p className="text-xs text-neutral-400 -mt-2">
+            Markers snap to the nearest koma key. <span style={{color:'#E20074'}}>Magenta</span> = 5-limit Just; <span className="text-green-400">Green</span> = 12-TET semitones.
+          </p>
         </div>
 
-        {/* Bottom controls: All Off (left) & Sustain toggle (right) */}
+        {/* Bottom controls */}
         <div className="flex items-center justify-between -mt-2">
-          <button onClick={allOff} className="px-3 py-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-sm">All Off</button>
+          <button onClick={allOff} className="px-3 py-2 rounded-md bg-red-600/80 hover:bg-red-600 text-white text-sm">All Off</button>
           <div className="flex items-center gap-3">
             <span className="text-sm text-neutral-300">Sustain</span>
             <button
@@ -757,26 +912,13 @@ export default function FiftyThreeTETKeyboard() {
             </button>
           </div>
         </div>
-
-        {/* Info cards */}
-        <section className="grid sm:grid-cols-2 gap-4">
-          <div className="bg-neutral-900 rounded-2xl p-4">
-            <h2 className="font-semibold mb-2">Math & Tuning</h2>
-            <ul className="text-sm text-neutral-300 list-disc pl-5 space-y-1">
-              <li>Step ratio r = 2^(1/53) ≈ {R.toFixed(6)}</li>
-              <li>One step ≈ {CENTS_PER_STEP.toFixed(4)} cents</li>
-              <li>Range = 0–31 steps (≈ perfect fifth). f(n) = Base × 2^(n/53)</li>
-            </ul>
-          </div>
-          <div className="bg-neutral-900 rounded-2xl p-4">
-            <h2 className="font-semibold mb-2">Tips</h2>
-            <ul className="text-sm text-neutral-300 list-disc pl-5 space-y-1">
-              <li>Use <em>sine</em> or <em>triangle</em> for clean beating perception between close steps.</li>
-              <li>"All Off" stops all active and latched voices.</li>
-            </ul>
-          </div>
-        </section>
       </div>
     </div>
   );
+}
+
+// Visual fade helper
+const MIN_REL = 0.03;
+function visualReleaseMs(rel: number) {
+  return Math.max(90, Math.round((Math.max(MIN_REL, rel) + 0.01) * 1000));
 }
