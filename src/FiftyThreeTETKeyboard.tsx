@@ -210,7 +210,7 @@ type KomaKeyboardProps = {
   onPointerCancel: (e: React.PointerEvent) => void;
   glowCounts: React.MutableRefObject<Map<number, number>>;
   fadeInfo: React.MutableRefObject<Map<number, { startedAt: number; durationMs: number }>>;
-  tetRowRef?: React.RefObject<HTMLDivElement>;
+  tetRowRef?: React.MutableRefObject<HTMLDivElement | null> | React.RefObject<HTMLDivElement>;
   isTouch: boolean;
   tetTip?: { left: number; text: string } | null;
   onTetPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
@@ -317,7 +317,7 @@ function KomaKeyboard(props: KomaKeyboardProps) {
 
         {showTet && (
           <div
-            ref={tetRowRef}
+            ref={tetRowRef as React.Ref<HTMLDivElement>}
             className="relative"
             style={{ touchAction: isTouch ? ('pan-y' as React.CSSProperties['touchAction']) : undefined }}
             onPointerDown={onTetPointerDown}
