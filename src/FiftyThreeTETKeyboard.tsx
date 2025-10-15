@@ -81,18 +81,33 @@ const CESNI_OPTIONS: CesniChoice[] = CESNI_OPTIONS_RAW
   .slice()
   .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 
-// Custom parser for 0..31 (relative steps)
+// Custom parser: intervals (koma jumps). Example "8 5 9 9" -> [0, 8, 13, 22, 31]
 function parseStepList(s: string): { steps: number[]; error: string | null } {
   if (!s.trim()) return { steps: [], error: null };
+
   const tokens = s.split(/[^0-9]+/).filter(Boolean);
-  const nums: number[] = [];
+  const intervals: number[] = [];
+
   for (const t of tokens) {
     const n = Number(t);
     if (!Number.isInteger(n)) return { steps: [], error: `Non-integer token: '${t}'` };
-    if (n < 0 || n > 31) return { steps: [], error: `Out of range: ${n} (use 0–31)` };
-    nums.push(n);
+    if (n < 0 || n > 31) return { steps: [], error: `Out of range interval: ${n} (use 0–31)` };
+    intervals.push(n);
   }
-  const uniq = Array.from(new Set(nums)).sort((a, b) => a - b);
+
+  // Build cumulative absolute steps, starting from base = 0
+  const steps: number[] = [0];
+  let acc = 0;
+  for (const jump of intervals) {
+    acc += jump;
+    if (acc > 31) return { steps: [], error: `Sum exceeds max step 31 (hit ${acc}).` };
+    steps.push(acc);
+  }
+
+  // De-duplicate while preserving order (in case user typed a 0 interval)
+  const uniq: number[] = [];
+  for (const v of steps) if (!uniq.includes(v)) uniq.push(v);
+
   return { steps: uniq, error: null };
 }
 
@@ -242,6 +257,48 @@ function KomaKeyboard(props: KomaKeyboardProps) {
     justCells.map((lbl, i) => (lbl ? (startStep + i) : -1)).filter(i => i >= 0)
   ), [justCells, startStep]);
 
+  //Calculating relative distance in koma for key labels
+  const deltaFromPrevCesni = React.useMemo(() => {
+    const highlights = Array.from(cesniAbsSteps)
+      .filter(s => s >= startStep && s <= endStep)
+      .sort((a, b) => a - b);
+
+    const m = new Map<number, number>();
+
+    if (highlights.length === 0) {
+      for (let s = startStep; s <= endStep; s++) m.set(s, s);
+      return m;
+    }
+
+    let hiIdx = 0;
+
+    for (let s = startStep; s <= endStep; s++) {
+      // advance to the greatest highlight <= s
+      while (hiIdx + 1 < highlights.length && highlights[hiIdx + 1] <= s) {
+        hiIdx++;
+      }
+
+      if (s < highlights[0]) {
+        // below the first highlight: define as 0 (tweak if you want a different behavior)
+        m.set(s, 0);
+        continue;
+      }
+
+      const atHighlight = s === highlights[hiIdx];
+
+      if (atHighlight) {
+        // distance from previous highlighted step (or 0 if this is the first)
+        const prevIdx = hiIdx - 1;
+        m.set(s, prevIdx >= 0 ? highlights[hiIdx] - highlights[prevIdx] : 0);
+      } else {
+        // distance from the greatest highlighted step below s
+        m.set(s, s - highlights[hiIdx]);
+      }
+    }
+
+    return m;
+  }, [cesniAbsSteps, startStep, endStep]);
+
   return (
     <div className="rounded-2xl bg-neutral-900 p-4 shadow-inner space-y-3">
       {title && <div className="text-sm text-neutral-300 font-semibold">{title}</div>}
@@ -292,7 +349,7 @@ function KomaKeyboard(props: KomaKeyboardProps) {
                      transitionDuration: `${durationMs}ms`,
                    }} />
               <div className="absolute left-1/2 -translate-x-1/2 top-[25%] text-xs sm:text-sm md:text-base font-extrabold leading-none drop-shadow-[0_1px_1px_rgba(0,0,0,0.3)]">
-                {k.absStep}
+              {deltaFromPrevCesni.get(k.absStep) ?? 0}
               </div>
             </div>
           );
@@ -634,6 +691,16 @@ export default function FiftyThreeTETKeyboard() {
   const onTetPointerMove = (e: React.PointerEvent<HTMLDivElement>) => { if (!isTouch) return; updateTetTipFromClientX(e.clientX); };
   const onTetPointerEnd = () => setTetTip(null);
 
+  //Convert steps to intervals for 'custom' entry
+  function stepsToIntervals(abs: number[]): string {
+    if (!abs.length) return '';
+    const a = abs.slice().sort((x, y) => x - y);
+    const withBase = a[0] === 0 ? a : [0, ...a];
+    const deltas: number[] = [];
+    for (let i = 1; i < withBase.length; i++) deltas.push(withBase[i] - withBase[i - 1]);
+    return deltas.join(' ');
+  }
+
   // Prefill "custom" with the previously-selected recipe (kb1)
   const handleCesni1Change = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newId = (e.target as HTMLSelectElement).value;
@@ -643,7 +710,7 @@ export default function FiftyThreeTETKeyboard() {
         prevId === 'custom'
           ? (customParsed.error ? [] : customParsed.steps)
           : (CESNI_OPTIONS.find(o => o.id === prevId)?.steps ?? []);
-      if (prevSteps.length) setCustomStepsStr(prevSteps.join(' '));
+      if (prevSteps.length) setCustomStepsStr(stepsToIntervals(prevSteps));
     }
     setCesniId(newId);
     prevCesniIdRef.current = newId;
@@ -660,7 +727,7 @@ export default function FiftyThreeTETKeyboard() {
         prevId === 'custom'
           ? (custom2Parsed.error ? [] : custom2Parsed.steps)
           : (CESNI_OPTIONS.find(o => o.id === prevId)?.steps ?? []);
-      if (prevSteps.length) setCustom2StepsStr(prevSteps.join(' '));
+      if (prevSteps.length) setCustom2StepsStr(stepsToIntervals(prevSteps));
     }
     setCesni2Id(newId);
     prevCesni2IdRef.current = newId;
@@ -787,14 +854,14 @@ export default function FiftyThreeTETKeyboard() {
               <span className="flex items-center gap-2">
                 <input
                   className="bg-neutral-800 rounded px-2 py-2 w-52 text-sm"
-                  placeholder="relative e.g. 0 4 13 22 31"
+                  placeholder="intervals e.g. 4 9 9"
                   value={custom2StepsStr}
                   onChange={(e)=> setCustom2StepsStr(e.target.value)}
                 />
                 {custom2Parsed.error ? (
                   <span className="text-red-400 text-xs">{custom2Parsed.error}</span>
                 ) : (
-                  <span className="text-neutral-400 text-xs">0–31 relative to start</span>
+                  <span className="text-neutral-400 text-xs">Intervals in koma; use space to separate</span>
                 )}
               </span>
             )}
@@ -841,14 +908,14 @@ export default function FiftyThreeTETKeyboard() {
               <span className="flex items-center gap-2">
                 <input
                   className="bg-neutral-800 rounded px-2 py-2 w-52 text-sm"
-                  placeholder="e.g. 0 8 13 22 31"
+                  placeholder="intervals e.g. 8 5 9 9"
                   value={customStepsStr}
                   onChange={(e)=> setCustomStepsStr(e.target.value)}
                 />
                 {customParsed.error ? (
                   <span className="text-red-400 text-xs">{customParsed.error}</span>
                 ) : (
-                  <span className="text-neutral-400 text-xs">0–31, space/comma separated</span>
+                  <span className="text-neutral-400 text-xs">Intervals in koma, use space to separate</span>
                 )}
               </span>
             )}
