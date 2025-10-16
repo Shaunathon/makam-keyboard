@@ -76,10 +76,16 @@ const CESNI_OPTIONS_RAW: CesniChoice[] = [
   { id: 'custom', label: 'Custom (enter steps)', steps: [] },
 ];
 
-// Alphabetically-sorted options by label (includes None/Custom)
+// Alphabetical by label, but force 'none' first and 'custom' last
 const CESNI_OPTIONS: CesniChoice[] = CESNI_OPTIONS_RAW
   .slice()
-  .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+  .sort((a, b) => {
+    const weight = (id: string) => (id === 'none' ? -1 : id === 'custom' ? 1 : 0);
+    const aw = weight(a.id);
+    const bw = weight(b.id);
+    if (aw !== bw) return aw - bw; // none < normal < custom
+    return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+  });
 
 // Custom parser: intervals (koma jumps). Example "8 5 9 9" -> [0, 8, 13, 22, 31]
 function parseStepList(s: string): { steps: number[]; error: string | null } {
@@ -461,7 +467,9 @@ export default function FiftyThreeTETKeyboard() {
     const maxRel = cesni2RelSteps.length ? Math.max(...cesni2RelSteps) : 0;
     return Math.min(ABS_MAX_STEP, startStep2 + maxRel);
   }, [cesni2RelSteps, startStep2]);
-
+  //Show koma keys up to 53 when 'none' cesni is selected
+  const renderStart2 = cesni2Id === 'none' ? endStep1 : startStep2;
+  const renderEnd2   = cesni2Id === 'none' ? 53 : endStep2;
   const cesni2AbsSet = useMemo(
     () => new Set<number>(cesni2RelSteps.map(s => startStep2 + s).filter(s => s >= startStep2 && s <= endStep2)),
     [cesni2RelSteps, startStep2, endStep2]
@@ -474,8 +482,8 @@ export default function FiftyThreeTETKeyboard() {
   const tetDataKb1 = useMemo(() => buildTetDataForRange(startStep1, endStep1, transpose12), [startStep1, endStep1, transpose12]);
   const justCellsKb1 = useMemo(() => buildJustCellsForRange(startStep1, endStep1), [startStep1, endStep1]);
 
-  const tetDataKb2 = useMemo(() => buildTetDataForRange(startStep2, endStep2, transpose12), [startStep2, endStep2, transpose12]);
-  const justCellsKb2 = useMemo(() => buildJustCellsForRange(startStep2, endStep2), [startStep2, endStep2]);
+  const tetDataKb2 = useMemo(() => buildTetDataForRange(renderStart2, renderEnd2, transpose12), [renderStart2, renderEnd2, transpose12]);
+  const justCellsKb2 = useMemo(() => buildJustCellsForRange(renderStart2, renderEnd2), [renderStart2, renderEnd2]);
 
   // Force re-render on ref map updates
   const [, setUiPulse] = useState(0);
@@ -867,12 +875,12 @@ export default function FiftyThreeTETKeyboard() {
             )}
 
             <span className="text-neutral-400 text-xs">Start = highest highlighted on Keyboard 1 → <span className="font-mono">{startStep2}</span></span>
-          </div>
+          </div>            
 
           {/* Keyboard 2 surface */}
           <KomaKeyboard
-            startStep={startStep2}
-            endStep={endStep2}
+            startStep={renderStart2}
+            endStep={renderEnd2}
             cesniAbsSteps={cesni2AbsSet}
             showTet={showTet}
             showJust={showJust}
@@ -885,7 +893,7 @@ export default function FiftyThreeTETKeyboard() {
             glowCounts={glowCounts}
             fadeInfo={fadeInfo}
             isTouch={isTouch}
-          />
+           />
         </div>
 
         {/* KEYBOARD 1 container (below) */}
