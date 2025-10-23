@@ -60,6 +60,7 @@ const CESNI_OPTIONS_RAW: CesniChoice[] = [
   { id: 'kurdi_penta',   label: 'Kürdi pentachord',   steps: [0, 4, 13, 22, 31] },
   { id: 'rast_penta',    label: 'Rast pentachord',    steps: [0, 9, 17, 22, 31] },
   { id: 'segah_penta',   label: 'Segah pentachord',   steps: [0, 5, 14, 22, 31] },
+  { id: 'nikriz_penta',  label: 'Nikriz pentachord',  steps: [0, 9, 14, 26, 31] },
 
   // Tetrachords derived from pentachords (omit 31)
   { id: 'buselik_tetra', label: 'Buselik tetrachord', steps: [0, 9, 13, 22] },
